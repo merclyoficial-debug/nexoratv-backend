@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="RokuSourcesTask" extends="Task">
+  <interface>
+    <field id="baseUrl" type="string" />
+    <field id="sources" type="array" />
+    <field id="error" type="string" />
+  </interface>
+  <script type="text/brightscript" uri="pkg:/components/RokuSourcesTask.brs" />
+</component>

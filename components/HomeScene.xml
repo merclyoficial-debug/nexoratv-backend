@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component name="HomeScene" extends="Scene">
+  <script type="text/brightscript" uri="pkg:/components/HomeScene.brs" />
+  <children>
+    <Rectangle
+      width="1280"
+      height="720"
+      color="0x101018FF" />
+
+    <Label
+      id="heading"
+      translation="[60,35]"
+      width="1160"
+      height="65"
+      text="NEXORATV"
+      color="0xFFFFFFFF"
+      font="font:LargeBoldSystemFont" />
+
+    <LabelList
+      id="channels"
+      translation="[60,115]"
+      itemSize="[1160,52]"
+      numRows="9"
+      focusBitmapUri=""
+      focusFootprintBitmapUri=""
+      drawFocusFeedback="true" />
+
+    <Video
+      id="player"
+      translation="[0,0]"
+      width="1280"
+      height="720"
+      visible="false" />
+  </children>
+</component>

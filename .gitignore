@@ -1,0 +1,31 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Backups e arquivos temporarios
+*.bak-*
+*.backup
+*.vazio.backup
+*.zip
+_pacote_teste/
+cabecalhos_teste.txt
+resposta_teste.txt
+
+# Ambiente virtual
+venv/
+.venv/
+env/
+
+# Configuracoes locais
+.env
+.vscode/
+.idea/
+
+# Sistema
+Thumbs.db
+.DS_Store
+
+# Backups manuais
+sistema_iptv_roku_backup.py
+integrar_api_roku.py
