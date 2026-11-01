@@ -2,12 +2,12 @@ from flask import Flask, jsonify, request, Response
 from curl_cffi import requests as curl_requests
 import re
 import os
+import asyncio
+import nodriver as uc
 
 app = Flask(__name__)
 
-# Substitui o cloudscraper pelo curl_cffi, que imita o fingerprint TLS de um Chrome real
 scraper = curl_requests.Session(impersonate="chrome")
-
 HEADERS_ORIGEM = {"Referer": "https://embedcanaisdetv.xyz", "Origin": "https://embedcanaisdetv.xyz"}
 
 CANAIS_DATABASE = {
@@ -76,95 +76,130 @@ CANAIS_DATABASE = {
     "bandsports": {"name": "Band Sports", "slug": "bandsports"}
 }
 
-def extrair_m3u8_do_embed(embed_url):
+
+def _extrair_com_nodriver(url):
+    """Abre Chrome real, resolve Turnstile, devolve HTML."""
+    async def _run():
+        browser = await uc.start(
+            headless=True,
+            browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+        )
+        try:
+            page = await browser.get(url)
+            await page.sleep(8)  # espera o Cloudflare resolver
+            html = await page.get_content()
+            return html
+        finally:
+            browser.stop()
+
     try:
-        resposta = scraper.get(embed_url, timeout=15)
-        html = resposta.text
-        padrao_m3u8 = r'(https?://[^\s"\',\?<>#]+\.m3u8[^\s"\',<>]*)'
-        links = re.findall(padrao_m3u8, html)
-        if links:
-            return links[0].replace('\\/', '/')
+        return asyncio.run(_run())
     except Exception as e:
-        print(f"Erro no curl_cffi: {e}")
+        print(f"[NODRIVER] Erro: {type(e).__name__}: {e}")
+        return None
+
+
+def extrair_m3u8_do_embed(embed_url):
+    # Tentativa 1: curl_cffi (rapido)
+    try:
+        print(f"[EXTRAIR] Tentativa 1 (curl_cffi): {embed_url}", flush=True)
+        resposta = scraper.get(embed_url, timeout=15)
+        if resposta.status_code == 200:
+            padrao = r'(https?://[^\s"\',\?<>#]+\.m3u8[^\s"\',<>]*)'
+            links = re.findall(padrao, resposta.text)
+            if links:
+                link = links[0].replace('\\/', '/')
+                print(f"[EXTRAIR] OK via curl_cffi: {link[:80]}", flush=True)
+                return link
+        print(f"[EXTRAIR] curl_cffi falhou. Status: {resposta.status_code}", flush=True)
+    except Exception as e:
+        print(f"[EXTRAIR] curl_cffi erro: {e}", flush=True)
+
+    # Tentativa 2: nodriver (Chrome real)
+    print(f"[EXTRAIR] Tentativa 2 (nodriver/Chrome): {embed_url}", flush=True)
+    html = _extrair_com_nodriver(embed_url)
+    if html:
+        padrao = r'(https?://[^\s"\',\?<>#]+\.m3u8[^\s"\',<>]*)'
+        links = re.findall(padrao, html)
+        if links:
+            link = links[0].replace('\\/', '/')
+            print(f"[EXTRAIR] OK via nodriver: {link[:80]}", flush=True)
+            return link
+        print(f"[EXTRAIR] nodriver: HTML sem .m3u8. Tamanho: {len(html)}", flush=True)
+    else:
+        print(f"[EXTRAIR] nodriver retornou None", flush=True)
+
     return None
+
 
 @app.route('/api/roku/sources', methods=['GET'])
 def listar_fontes():
-    fontes_lista = [{"id": k, "name": v["name"]} for k, v in CANAIS_DATABASE.items()]
-    return jsonify({"sources": fontes_lista})
+    return jsonify({"sources": [{"id": k, "name": v["name"]} for k, v in CANAIS_DATABASE.items()]})
+
 
 @app.route('/api/roku/sources/<source_id>', methods=['GET'])
 def detalhar_fonte(source_id):
     canal = CANAIS_DATABASE.get(source_id)
     if not canal:
         return jsonify({"error": "Nao encontrado"}), 404
-    return jsonify({
-        "source": {
-            "id": canal["slug"],
-            "name": canal["name"],
-            "format": "hls",
-            "url": f"{request.url_root}resolver_video?canal={canal['slug']}"
-        }
-    })
+    return jsonify({"source": {
+        "id": canal["slug"], "name": canal["name"], "format": "hls",
+        "url": f"{request.url_root}resolver_video?canal={canal['slug']}"
+    }})
+
 
 @app.route('/resolver_video', methods=['GET'])
 def resolver_video():
-    slug = request.args.get('canal', '')
-    canal_identificado = slug.split("canal=")[-1].split("/")[-1].strip()
+    slug = request.args.get('canal', '').strip()
+    print(f"[RESOLVER] canal='{slug}' host={request.host}", flush=True)
+    if not slug:
+        return "Parametro ausente", 400
 
     b, q = chr(47), chr(63)
-    url_completa_embed = "https:" + b + b + "embedcanaisdetv.xyz" + b + "e" + b + "index.php" + q + "canal=" + canal_identificado
+    embed_url = "https:" + b + b + "embedcanaisdetv.xyz" + b + "e" + b + "index.php" + q + "canal=" + slug
 
-    link_m3u8_real = extrair_m3u8_do_embed(url_completa_embed)
+    link = extrair_m3u8_do_embed(embed_url)
+    if not link:
+        return "Sinal indisponivel", 404
 
-    if link_m3u8_real:
-        try:
-            req_m3u8 = scraper.get(link_m3u8_real, headers=HEADERS_ORIGEM, timeout=15)
-            conteudo = req_m3u8.text
+    try:
+        r = scraper.get(link, headers=HEADERS_ORIGEM, timeout=15)
+        base_ts = link.rsplit('/', 1)[0] + '/'
+        linhas = []
+        for linha in r.text.splitlines():
+            if '.ts' in linha and not linha.startswith('http'):
+                linhas.append(f"{request.url_root}ts_proxy?url={base_ts}{linha.strip()}")
+            elif '.ts' in linha and linha.startswith('http'):
+                linhas.append(f"{request.url_root}ts_proxy?url={linha.strip()}")
+            else:
+                linhas.append(linha)
+        return Response("\n".join(linhas), mimetype='application/x-mpegURL')
+    except Exception as e:
+        print(f"[RESOLVER] erro playlist: {e}", flush=True)
+        return "Erro Interno", 500
 
-            url_base_ts = link_m3u8_real.rsplit('/', 1)[0] + '/'
-
-            linhas = []
-            for linha in conteudo.splitlines():
-                if '.ts' in linha and not linha.startswith('http'):
-                    url_segmento_real = url_base_ts + linha
-                    linhas.append(f"{request.url_root}ts_proxy?url={url_segmento_real}")
-                elif '.ts' in linha and linha.startswith('http'):
-                    linhas.append(f"{request.url_root}ts_proxy?url={linha}")
-                else:
-                    linhas.append(linha)
-
-            conteudo_final = "\n".join(linhas)
-            return Response(conteudo_final, mimetype='application/x-mpegURL')
-
-        except Exception as err:
-            print(f"Erro ao processar Playlist M3U8: {err}")
-            return "Erro Interno no Proxy", 500
-    return "Sinal indisponivel", 404
 
 @app.route('/ts_proxy', methods=['GET'])
 def ts_proxy():
-    """ Rota que baixa o pedaco do video e repassa para a RokuTV """
     url_ts = request.args.get('url')
     if not url_ts:
         return "URL invalida", 400
-
     try:
-        resposta_ts = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=20)
+        r = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=20)
+        def gen():
+            for c in r.iter_content(chunk_size=8192):
+                if c:
+                    yield c
+        return Response(gen(), content_type='video/MP2T')
+    except Exception as e:
+        print(f"[TS] erro: {e}", flush=True)
+        return "Erro", 502
 
-        def gerar_stream():
-            for chunk in resposta_ts.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
-
-        return Response(gerar_stream(), content_type='video/MP2T')
-    except Exception as ts_err:
-        print(f"Erro ao tunelar segmento TS: {ts_err}")
-        return "Erro de transmissao", 502
 
 @app.route('/', methods=['GET'])
 def healthcheck():
     return jsonify({"status": "ok", "app": "Nexoratv-Roku backend"})
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
