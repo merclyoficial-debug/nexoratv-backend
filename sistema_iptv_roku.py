@@ -1,50 +1,12 @@
 from flask import Flask, jsonify, request, Response
-from werkzeug.middleware.proxy_fix import ProxyFix
-import socket
-import itertools
 import cloudscraper
 import re
 import os
 
-# ============================================================
-# OVERRIDE DE DNS
-# O Render (e o Enzonic) usam DNS padrao que falha em resolver
-# estes dominios. Forcamos IPs fixos descobertos via 1.1.1.1.
-# ============================================================
-DNS_OVERRIDE = {
-    "embedcanaisdetv.xyz": ["104.21.50.169", "172.67.164.103"],
-    "playerembcanais.com": ["172.67.158.167", "104.21.14.108"],
-}
-
-_original_getaddrinfo = socket.getaddrinfo
-_counter = itertools.cycle(range(1000))
-
-def _patched_getaddrinfo(host, port, *args, **kwargs):
-    if host:
-        host_lower = host.lower()
-        # Match exato ou subdominio (ex: 2910.playerembcanais.com)
-        for domain, ips in DNS_OVERRIDE.items():
-            if host_lower == domain or host_lower.endswith("." + domain):
-                host = ips[next(_counter) % len(ips)]
-                break
-    return _original_getaddrinfo(host, port, *args, **kwargs)
-
-socket.getaddrinfo = _patched_getaddrinfo
-# ============================================================
-
 app = Flask(__name__)
 
-# x_host=0 e x_prefix=0: NAO confia no X-Forwarded-Host do proxy,
-# que aponta para host interno. Usa o Host real da requisicao.
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_prefix=0)
-
-scraper = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False}
-)
-HEADERS_ORIGEM = {
-    "Referer": "https://embedcanaisdetv.xyz",
-    "Origin": "https://embedcanaisdetv.xyz"
-}
+scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+HEADERS_ORIGEM = {"Referer": "https://embedcanaisdetv.xyz", "Origin": "https://embedcanaisdetv.xyz"}
 
 CANAIS_DATABASE = {
     "premiere2": {"name": "Premiere 2", "slug": "premiere2"},
@@ -109,54 +71,25 @@ CANAIS_DATABASE = {
     "appletv03": {"name": "Apple TV 03", "slug": "appletv03"},
     "appletv04": {"name": "Apple TV 04", "slug": "appletv04"},
     "appletv05": {"name": "Apple TV 05", "slug": "appletv05"},
-    "bandsports": {"name": "Band Sports", "slug": "bandsports"},
+    "bandsports": {"name": "Band Sports", "slug": "bandsports"}
 }
 
-
 def extrair_m3u8_do_embed(embed_url):
-    """Tenta extrair o link .m3u8 do HTML do embed. Loga detalhes no stdout."""
     try:
-        print(f"[EXTRAIR] Acessando: {embed_url}", flush=True)
-        resposta = scraper.get(embed_url, timeout=15)
-        print(f"[EXTRAIR] Status HTTP: {resposta.status_code} | Tamanho HTML: {len(resposta.text)} bytes", flush=True)
-
-        if resposta.status_code != 200:
-            print(f"[EXTRAIR] FALHA - Status nao e 200. Body (primeiros 300 chars): {resposta.text[:300]}", flush=True)
-            return None
-
+        resposta = scraper.get(embed_url, timeout=10)
         html = resposta.text
-
-        if "cf-browser-verification" in html or "Just a moment" in html or "Checking your browser" in html:
-            print("[EXTRAIR] FALHA - Cloudflare challenge detectado (bloqueio de bot).", flush=True)
-            return None
-
         padrao_m3u8 = r'(https?://[^\s"\',\?<>#]+\.m3u8[^\s"\',<>]*)'
         links = re.findall(padrao_m3u8, html)
-        print(f"[EXTRAIR] Links .m3u8 encontrados: {len(links)}", flush=True)
-
         if links:
-            link_final = links[0].replace('\\/', '/')
-            print(f"[EXTRAIR] OK - Link: {link_final[:120]}", flush=True)
-            return link_final
-
-        print(f"[EXTRAIR] FALHA - Nenhum .m3u8 no HTML. Primeiros 500 chars: {html[:500]}", flush=True)
-        return None
-
+            return links[0].replace('\\/', '/')
     except Exception as e:
-        print(f"[EXTRAIR] EXCECAO: {type(e).__name__}: {e}", flush=True)
-        return None
-
-
-def _base_url():
-    """Retorna a URL publica do app, sem barra final."""
-    return request.url_root.rstrip('/')
-
+        print(f"Erro Cloudflare no Scraper: {e}")
+    return None
 
 @app.route('/api/roku/sources', methods=['GET'])
 def listar_fontes():
     fontes_lista = [{"id": k, "name": v["name"]} for k, v in CANAIS_DATABASE.items()]
     return jsonify({"sources": fontes_lista})
-
 
 @app.route('/api/roku/sources/<source_id>', methods=['GET'])
 def detalhar_fonte(source_id):
@@ -168,115 +101,68 @@ def detalhar_fonte(source_id):
             "id": canal["slug"],
             "name": canal["name"],
             "format": "hls",
-            "url": f"{_base_url()}/resolver_video?canal={canal['slug']}"
+            "url": f"{request.url_root}resolver_video?canal={canal['slug']}"
         }
     })
 
-
 @app.route('/resolver_video', methods=['GET'])
 def resolver_video():
-    slug = request.args.get('canal', '').strip()
-    print(f"[RESOLVER] Canal solicitado: '{slug}' | Host: {request.host}", flush=True)
-
-    if not slug:
-        return "Parametro 'canal' ausente", 400
+    slug = request.args.get('canal', '')
+    canal_identificado = slug.split("canal=")[-1].split("/")[-1].strip()
 
     b, q = chr(47), chr(63)
-    url_completa_embed = "https:" + b + b + "embedcanaisdetv.xyz" + b + "e" + b + "index.php" + q + "canal=" + slug
+    url_completa_embed = "https:" + b + b + "embedcanaisdetv.xyz" + b + "e" + b + "index.php" + q + "canal=" + canal_identificado
 
     link_m3u8_real = extrair_m3u8_do_embed(url_completa_embed)
 
-    if not link_m3u8_real:
-        print(f"[RESOLVER] Retornando 'Sinal indisponivel' para '{slug}'", flush=True)
-        return "Sinal indisponivel", 404
+    if link_m3u8_real:
+        try:
+            req_m3u8 = scraper.get(link_m3u8_real, headers=HEADERS_ORIGEM, timeout=10)
+            conteudo = req_m3u8.text
 
-    try:
-        req_m3u8 = scraper.get(link_m3u8_real, headers=HEADERS_ORIGEM, timeout=15)
-        conteudo = req_m3u8.text
-        print(f"[RESOLVER] Playlist M3U8 baixada. Status: {req_m3u8.status_code} | Tamanho: {len(conteudo)} bytes", flush=True)
+            url_base_ts = link_m3u8_real.rsplit('/', 1)[0] + '/'
 
-        url_base_ts = link_m3u8_real.rsplit('/', 1)[0] + '/'
-        base = _base_url()
+            linhas = []
+            for linha in conteudo.splitlines():
+                if '.ts' in linha and not linha.startswith('http'):
+                    url_segmento_real = url_base_ts + linha
+                    linhas.append(f"{request.url_root}ts_proxy?url={url_segmento_real}")
+                elif '.ts' in linha and linha.startswith('http'):
+                    linhas.append(f"{request.url_root}ts_proxy?url={linha}")
+                else:
+                    linhas.append(linha)
 
-        linhas = []
-        for linha in conteudo.splitlines():
-            if '.ts' in linha and not linha.startswith('http'):
-                url_segmento_real = url_base_ts + linha.strip()
-                linhas.append(f"{base}/ts_proxy?url={url_segmento_real}")
-            elif '.ts' in linha and linha.startswith('http'):
-                linhas.append(f"{base}/ts_proxy?url={linha.strip()}")
-            else:
-                linhas.append(linha)
+            conteudo_final = "\n".join(linhas)
+            return Response(conteudo_final, mimetype='application/x-mpegURL')
 
-        conteudo_final = "\n".join(linhas)
-        return Response(conteudo_final, mimetype='application/x-mpegURL')
-
-    except Exception as err:
-        print(f"[RESOLVER] ERRO ao processar Playlist: {type(err).__name__}: {err}", flush=True)
-        return "Erro Interno no Proxy", 500
-
+        except Exception as err:
+            print(f"Erro ao processar Playlist M3U8: {err}")
+            return "Erro Interno no Proxy", 500
+    return "Sinal indisponivel", 404
 
 @app.route('/ts_proxy', methods=['GET'])
 def ts_proxy():
-    """Baixa o pedaco .ts da CDN (com Referer) e repassa pra RokuTV."""
+    """ Rota que engana a Cloudflare baixando o pedaco do video e repassando para a RokuTV """
     url_ts = request.args.get('url')
     if not url_ts:
         return "URL invalida", 400
 
     try:
-        resposta_ts = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=20)
+        resposta_ts = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=15)
 
         def gerar_stream():
-            for chunk in resposta_ts.iter_content(chunk_size=8192):
-                if chunk:
-                    yield chunk
+            for chunk in resposta_ts.iter_content(chunk_size=4096):
+                yield chunk
 
-        headers_resposta = {
-            'Content-Type': 'video/MP2T',
-            'Cache-Control': 'no-cache',
-            'Access-Control-Allow-Origin': '*',
-        }
-        return Response(gerar_stream(), headers=headers_resposta, status=resposta_ts.status_code)
-
+        return Response(gerar_stream(), content_type='video/MP2T')
     except Exception as ts_err:
-        print(f"[TS_PROXY] ERRO: {type(ts_err).__name__}: {ts_err}", flush=True)
+        print(f"Erro ao tunelar segmento TS: {ts_err}")
         return "Erro de transmissao", 502
-
 
 @app.route('/', methods=['GET'])
 def healthcheck():
-    return jsonify({
-        "status": "ok",
-        "app": "Nexoratv-Roku backend",
-        "endpoints": [
-            "/api/roku/sources",
-            "/api/roku/sources/<id>",
-            "/resolver_video?canal=<slug>",
-            "/ts_proxy?url=<url_ts>"
-        ]
-    })
-
+    return jsonify({"status": "ok", "app": "Nexoratv-Roku backend"})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    debug = os.environ.get('FLASK_DEBUG', '0') == '1'
-
-    # Dentro do Enzonic (tem $SERVER_PORT) -> sobe Gunicorn internamente
-    if os.environ.get('SERVER_PORT'):
-        import sys
-        from gunicorn.app.wsgiapp import run as gunicorn_run
-        sys.argv = [
-            'gunicorn',
-            '--bind', f'0.0.0.0:{port}',
-            '--workers', '1',
-            '--threads', '6',
-            '--timeout', '120',
-            '--capture-output',
-            '--access-logfile', '-',
-            '--error-logfile', '-',
-            'sistema_iptv_roku:app'
-        ]
-        gunicorn_run()
-    else:
-        # Local (seu PC) -> Flask dev
-        app.run(host='0.0.0.0', port=port, debug=debug)
+    app.run(host='0.0.0.0', port=port, debug=False)
