@@ -1,4 +1,4 @@
-﻿import glob
+import glob
 import os
 from flask import Flask, jsonify, request, Response
 from curl_cffi import requests as curl_requests
@@ -81,8 +81,8 @@ CANAIS_DATABASE = {
 def _encontrar_chromium():
     """Procura o executavel do Chromium dentro do container."""
     padroes = [
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
         "/ms-playwright/chromium-*/chrome-linux/chrome",
+        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
         "/usr/bin/chromium",
         "/usr/bin/chromium-browser",
         "/usr/bin/google-chrome",
@@ -104,7 +104,12 @@ def _extrair_com_nodriver(url):
     async def _run():
         kwargs = {
             "headless": True,
-            "browser_args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+            "sandbox": False,
+            "browser_args": [
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+            ],
         }
         if chrome_path:
             kwargs["browser_executable_path"] = chrome_path
