@@ -1,14 +1,41 @@
 from flask import Flask, jsonify, request, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
+import socket
+import itertools
 import cloudscraper
 import re
 import os
 
+# ============================================================
+# OVERRIDE DE DNS
+# O Render (e o Enzonic) usam DNS padrao que falha em resolver
+# estes dominios. Forcamos IPs fixos descobertos via 1.1.1.1.
+# ============================================================
+DNS_OVERRIDE = {
+    "embedcanaisdetv.xyz": ["104.21.50.169", "172.67.164.103"],
+    "playerembcanais.com": ["172.67.158.167", "104.21.14.108"],
+}
+
+_original_getaddrinfo = socket.getaddrinfo
+_counter = itertools.cycle(range(1000))
+
+def _patched_getaddrinfo(host, port, *args, **kwargs):
+    if host:
+        host_lower = host.lower()
+        # Match exato ou subdominio (ex: 2910.playerembcanais.com)
+        for domain, ips in DNS_OVERRIDE.items():
+            if host_lower == domain or host_lower.endswith("." + domain):
+                host = ips[next(_counter) % len(ips)]
+                break
+    return _original_getaddrinfo(host, port, *args, **kwargs)
+
+socket.getaddrinfo = _patched_getaddrinfo
+# ============================================================
+
 app = Flask(__name__)
 
-# x_host=0 e x_prefix=0: NAO confia no X-Forwarded-Host do Enzonic,
-# que aponta para "lon-two" (host interno, inacessivel publicamente).
-# Usa o Host real da requisicao (lon-three), que e publico.
+# x_host=0 e x_prefix=0: NAO confia no X-Forwarded-Host do proxy,
+# que aponta para host interno. Usa o Host real da requisicao.
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_prefix=0)
 
 scraper = cloudscraper.create_scraper(
@@ -87,10 +114,7 @@ CANAIS_DATABASE = {
 
 
 def extrair_m3u8_do_embed(embed_url):
-    """
-    Tenta extrair o link .m3u8 do HTML do embed.
-    Loga detalhes no stdout para diagnostico via console do Enzonic.
-    """
+    """Tenta extrair o link .m3u8 do HTML do embed. Loga detalhes no stdout."""
     try:
         print(f"[EXTRAIR] Acessando: {embed_url}", flush=True)
         resposta = scraper.get(embed_url, timeout=15)
