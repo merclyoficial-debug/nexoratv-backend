@@ -4,19 +4,19 @@ WORKDIR /app
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-# Instala apenas o Xvfb para o display virtual (headless)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb \
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libgtk-3-0 \
+    libgbm-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia e instala as dependências Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Copia o código da aplicação
 COPY . .
 
-# Dá permissão de execução ao entrypoint
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
