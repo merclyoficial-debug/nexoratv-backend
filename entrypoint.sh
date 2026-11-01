@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-Xvfb :99 -screen 0 1280x1024x24 &
+sudo Xvfb :99 -screen 0 1280x1024x24 &
 export DISPLAY=:99
 
 sleep 3
