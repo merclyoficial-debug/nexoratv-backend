@@ -1,11 +1,13 @@
 from flask import Flask, jsonify, request, Response
-import cloudscraper
+from curl_cffi import requests as curl_requests
 import re
 import os
 
 app = Flask(__name__)
 
-scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'mobile': False})
+# Substitui o cloudscraper pelo curl_cffi, que imita o fingerprint TLS de um Chrome real
+scraper = curl_requests.Session(impersonate="chrome")
+
 HEADERS_ORIGEM = {"Referer": "https://embedcanaisdetv.xyz", "Origin": "https://embedcanaisdetv.xyz"}
 
 CANAIS_DATABASE = {
@@ -76,14 +78,14 @@ CANAIS_DATABASE = {
 
 def extrair_m3u8_do_embed(embed_url):
     try:
-        resposta = scraper.get(embed_url, timeout=10)
+        resposta = scraper.get(embed_url, timeout=15)
         html = resposta.text
         padrao_m3u8 = r'(https?://[^\s"\',\?<>#]+\.m3u8[^\s"\',<>]*)'
         links = re.findall(padrao_m3u8, html)
         if links:
             return links[0].replace('\\/', '/')
     except Exception as e:
-        print(f"Erro Cloudflare no Scraper: {e}")
+        print(f"Erro no curl_cffi: {e}")
     return None
 
 @app.route('/api/roku/sources', methods=['GET'])
@@ -117,7 +119,7 @@ def resolver_video():
 
     if link_m3u8_real:
         try:
-            req_m3u8 = scraper.get(link_m3u8_real, headers=HEADERS_ORIGEM, timeout=10)
+            req_m3u8 = scraper.get(link_m3u8_real, headers=HEADERS_ORIGEM, timeout=15)
             conteudo = req_m3u8.text
 
             url_base_ts = link_m3u8_real.rsplit('/', 1)[0] + '/'
@@ -142,17 +144,18 @@ def resolver_video():
 
 @app.route('/ts_proxy', methods=['GET'])
 def ts_proxy():
-    """ Rota que engana a Cloudflare baixando o pedaco do video e repassando para a RokuTV """
+    """ Rota que baixa o pedaco do video e repassa para a RokuTV """
     url_ts = request.args.get('url')
     if not url_ts:
         return "URL invalida", 400
 
     try:
-        resposta_ts = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=15)
+        resposta_ts = scraper.get(url_ts, headers=HEADERS_ORIGEM, stream=True, timeout=20)
 
         def gerar_stream():
-            for chunk in resposta_ts.iter_content(chunk_size=4096):
-                yield chunk
+            for chunk in resposta_ts.iter_content(chunk_size=8192):
+                if chunk:
+                    yield chunk
 
         return Response(gerar_stream(), content_type='video/MP2T')
     except Exception as ts_err:
