@@ -78,54 +78,43 @@ CANAIS_DATABASE = {
 }
 
 
-def _encontrar_chromium():
-    """Procura o executavel do Chromium dentro do container."""
-    padroes = [
-        "/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-        "/usr/bin/google-chrome-stable",
-    ]
-    for padrao in padroes:
-        encontrados = glob.glob(padrao)
-        if encontrados:
-            print(f"[NODRIVER] Chromium encontrado em: {encontrados[0]}", flush=True)
-            return encontrados[0]
-    print("[NODRIVER] AVISO: nenhum Chromium encontrado nos caminhos padrao.", flush=True)
-    return None
-
-
 def _extrair_com_nodriver(url):
-    """Abre Chrome real, resolve Turnstile, devolve HTML."""
-    chrome_path = _encontrar_chromium()
-
+    """Abre Chrome real, resolve Turnstile, devolve HTML. Tenta 3 vezes."""
     async def _run():
-        kwargs = {
-            "headless": True,
-            "sandbox": False,
-            "browser_args": [
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-            ],
-        }
-        if chrome_path:
-            kwargs["browser_executable_path"] = chrome_path
-        browser = await uc.start(**kwargs)
-        try:
-            page = await browser.get(url)
-            await page.sleep(10)
-            html = await page.get_content()
-            return html
-        finally:
-            browser.stop()
+        chrome_path = "/usr/bin/google-chrome-stable"
+        for tentativa in range(1, 4):
+            try:
+                print(f"[NODRIVER] Tentativa {tentativa} de abrir Chrome em: {chrome_path}", flush=True)
+                browser = await uc.start(
+                    headless=True,
+                    sandbox=False,
+                    browser_executable_path=chrome_path,
+                    browser_args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-software-rasterizer",
+                        "--window-size=1280,1024",
+                    ],
+                )
+                try:
+                    page = await browser.get(url)
+                    await page.sleep(10)
+                    html = await page.get_content()
+                    print(f"[NODRIVER] Sucesso na tentativa {tentativa}. Tamanho HTML: {len(html)}", flush=True)
+                    return html
+                finally:
+                    browser.stop()
+            except Exception as e:
+                print(f"[NODRIVER] Erro na tentativa {tentativa}: {type(e).__name__}: {e}", flush=True)
+                if tentativa < 3:
+                    await asyncio.sleep(5)
+        return None
 
     try:
         return asyncio.run(_run())
     except Exception as e:
-        print(f"[NODRIVER] Erro: {type(e).__name__}: {e}", flush=True)
+        print(f"[NODRIVER] Erro fatal: {type(e).__name__}: {e}", flush=True)
         return None
 
 
