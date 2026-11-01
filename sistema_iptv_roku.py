@@ -86,7 +86,7 @@ def _extrair_com_nodriver(url):
         )
         try:
             page = await browser.get(url)
-            await page.sleep(8)  # espera o Cloudflare resolver
+            await page.sleep(8)
             html = await page.get_content()
             return html
         finally:
@@ -95,7 +95,7 @@ def _extrair_com_nodriver(url):
     try:
         return asyncio.run(_run())
     except Exception as e:
-        print(f"[NODRIVER] Erro: {type(e).__name__}: {e}")
+        print(f"[NODRIVER] Erro: {type(e).__name__}: {e}", flush=True)
         return None
 
 
