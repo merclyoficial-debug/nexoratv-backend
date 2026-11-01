@@ -4,26 +4,22 @@ WORKDIR /app
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Instala apenas o Xvfb para o display virtual (headless)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    gnupg \
     xvfb \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
+# Copia e instala as dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Copia o código da aplicação
 COPY . .
 
-RUN playwright install chromium
-RUN playwright install-deps
+# Dá permissão de execução ao entrypoint
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
 EXPOSE 10000
 
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
 CMD ["./entrypoint.sh"]
