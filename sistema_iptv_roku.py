@@ -1,7 +1,8 @@
+﻿import glob
+import os
 from flask import Flask, jsonify, request, Response
 from curl_cffi import requests as curl_requests
 import re
-import os
 import asyncio
 import nodriver as uc
 
@@ -77,16 +78,40 @@ CANAIS_DATABASE = {
 }
 
 
+def _encontrar_chromium():
+    """Procura o executavel do Chromium dentro do container."""
+    padroes = [
+        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+        "/ms-playwright/chromium-*/chrome-linux/chrome",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ]
+    for padrao in padroes:
+        encontrados = glob.glob(padrao)
+        if encontrados:
+            print(f"[NODRIVER] Chromium encontrado em: {encontrados[0]}", flush=True)
+            return encontrados[0]
+    print("[NODRIVER] AVISO: nenhum Chromium encontrado nos caminhos padrao.", flush=True)
+    return None
+
+
 def _extrair_com_nodriver(url):
     """Abre Chrome real, resolve Turnstile, devolve HTML."""
+    chrome_path = _encontrar_chromium()
+
     async def _run():
-        browser = await uc.start(
-            headless=True,
-            browser_args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        )
+        kwargs = {
+            "headless": True,
+            "browser_args": ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        }
+        if chrome_path:
+            kwargs["browser_executable_path"] = chrome_path
+        browser = await uc.start(**kwargs)
         try:
             page = await browser.get(url)
-            await page.sleep(8)
+            await page.sleep(10)
             html = await page.get_content()
             return html
         finally:
@@ -100,7 +125,6 @@ def _extrair_com_nodriver(url):
 
 
 def extrair_m3u8_do_embed(embed_url):
-    # Tentativa 1: curl_cffi (rapido)
     try:
         print(f"[EXTRAIR] Tentativa 1 (curl_cffi): {embed_url}", flush=True)
         resposta = scraper.get(embed_url, timeout=15)
@@ -115,7 +139,6 @@ def extrair_m3u8_do_embed(embed_url):
     except Exception as e:
         print(f"[EXTRAIR] curl_cffi erro: {e}", flush=True)
 
-    # Tentativa 2: nodriver (Chrome real)
     print(f"[EXTRAIR] Tentativa 2 (nodriver/Chrome): {embed_url}", flush=True)
     html = _extrair_com_nodriver(embed_url)
     if html:
